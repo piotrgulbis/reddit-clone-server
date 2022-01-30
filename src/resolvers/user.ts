@@ -30,44 +30,31 @@ class UserResponse {
 @Resolver()
 export class UserResolver {
   @Query(() => User, { nullable: true })
-  async me(
-    @Ctx() { em, req }: MyContext
-  ) {
+  me(@Ctx() { req }: MyContext) {
     if (!req.session.userId) {
       return null;
     }
 
-    const user = await em.findOne(User, { id: req.session.userId });
-
-    return user;
+    return User.findOne(req.session.userId);
   };
 
   @Query(() => [User])
-  users(
-    @Ctx() { em }: MyContext
-  ): Promise<User[]> {
-    return em.find(User, {});
+  users(): Promise<User[]> {
+    return User.find();
   };
 
   @Mutation(() => Number)
-  async deleteUser(
-    @Arg('id', () => Int) id: number,
-    @Ctx() { em }: MyContext
-  ): Promise<Number> {
-    const user = await em.findOne(User, { id });
-    if (!user) {
-      return 0;
-    }
-    await em.remove(user).flush();
+  async deleteUser(@Arg('id', () => Int) id: number): Promise<Number> {
+    await User.delete(id);
     return id;
   };
 
   @Mutation(() => UserResponse)
   async register(
     @Arg('options', () => UsernamePasswordInput) options: UsernamePasswordInput,
-    @Ctx() { em, req }: MyContext
+    @Ctx() { req }: MyContext
   ): Promise<UserResponse> {
-    const userExists = await em.findOne(User, { username: options.username.toLowerCase() });
+    const userExists = await User.findOne({ where: { username: options.username.toLowerCase() } });
 
     if (userExists) {
       return {
@@ -85,16 +72,28 @@ export class UserResolver {
     }
 
     const hashedPassword = await argon2.hash(options.password);
-    const user = em.create(User, {
-      username: options.username.toLowerCase(),
-      password: hashedPassword,
-      email: options.email.toLowerCase(),
-    });
+    let user;
 
-    // Piotr 15.01.2022: TODO: Might want to check for err.code and reply with 
-    // appropriate messages.
     try {
-      await em.persistAndFlush(user);
+      user = await User.create({
+        username: options.username.toLowerCase(),
+        password: hashedPassword,
+        email: options.email.toLowerCase(),
+      }).save(); 
+      // Example of using Query Builder
+      // Add following Import:  import { getConnection } from 'typeorm';
+      // const result = await getConnection()
+      //   .createQueryBuilder()
+      //   .insert()
+      //   .into(User)
+      //   .values({
+      //     username: options.username.toLowerCase(),
+      //     password: hashedPassword,
+      //     email: options.email.toLowerCase(),
+      //   })
+      //   .returning('*')
+      //   .execute();
+      // user = result.raw[0];
     } catch (err) {
       return {
         errors: [{
@@ -107,19 +106,18 @@ export class UserResolver {
     req.session.userId = user.id;
 
     return { user };
-
   };
 
   @Mutation(() => UserResponse)
   async login(
     @Arg('usernameOrEmail', () => String) usernameOrEmail: string,
     @Arg('password', () => String) password: string,
-    @Ctx() { em, req }: MyContext
+    @Ctx() { req }: MyContext
   ): Promise<UserResponse> {
-    const user = await em.findOne(User,
+    const user = await User.findOne(
       usernameOrEmail.includes('@')
-        ? { email: usernameOrEmail.toLowerCase() }
-        : { username: usernameOrEmail.toLowerCase() }
+        ? { where: { email: usernameOrEmail.toLowerCase() } }
+        : { where: { username: usernameOrEmail.toLowerCase() } }
     );
 
     // Piotr 15.01.2022: This is in my opinion not secure because you are giving a hint
@@ -171,7 +169,7 @@ export class UserResolver {
   async changePassword(
     @Arg('token') token: string,
     @Arg('newPassword') newPassword: string,
-    @Ctx() { em, redis }: MyContext
+    @Ctx() { redis }: MyContext
   ): Promise<UserResponse> {
     if (newPassword.length <= 5) {
       return {
@@ -198,7 +196,8 @@ export class UserResolver {
       };
     }
 
-    const user = await em.findOne(User, { id: parseInt(userId) });
+    const id = parseInt(userId);
+    const user = await User.findOne(id);
 
     if (!user) {
       return {
@@ -213,7 +212,7 @@ export class UserResolver {
 
     const hashedPassword = await argon2.hash(newPassword);
     user.password = hashedPassword;
-    await em.persistAndFlush(user);
+    await User.update(id, { password: hashedPassword });
 
     await redis.del(key);
 
@@ -228,9 +227,9 @@ export class UserResolver {
   @Mutation(() => Boolean)
   async forgotPassword(
     @Arg('email') email: string,
-    @Ctx() { em, redis }: MyContext
+    @Ctx() { redis }: MyContext
   ) {
-    const user = await em.findOne(User, { email });
+    const user = await User.findOne({ where: { email } });
     if (!user) {
       // Email not found, return true and do nothing so that the user does not know that 
       // the email was not found in the db to stop phishing.
