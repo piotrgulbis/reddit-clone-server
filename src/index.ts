@@ -58,7 +58,7 @@ const main = async () => {
         secure: __prod__, // cookie only works in https in production
       },
       saveUninitialized: false,
-      secret: 'ewifhwewefew',
+      secret: 'ewifhwewefew', // extract to .env file later
       resave: false,
     })
   );
